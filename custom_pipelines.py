@@ -1,27 +1,20 @@
+import os
+import io
 import re
+import sys
+import fitz
 import spacy
 import string
 import consts
-import numpy as np
-from numpy.linalg import norm
-from spacy.tokens import Span
+import argparse
+import tempfile
+from pathlib import Path
+from fontTools.ttLib import TTFont
+from spacy.util import filter_spans
 from spacy.language import Language
+from spacy.pipeline import EntityRuler, Sentencizer
 from sentence_transformers import SentenceTransformer
 
-
-text = """
-Common tasks for an IP address include both the identification of a host or a network, or identifying the location of a device. 
-An IP address is not random. The creation of an IP address has the basis of math. 
-The Internet Assigned Numbers Authority (IANA) allocates the IP address and its creation. 
-The full range of IP addresses can go from 0.0.0.0 to 255.255.255.255. There are also IPv6 addresses supported.
-Their range goes from ::2:3:4:5:6:7:8 to ::2:3:4:5:9:9:9. 
-You can also access our services using Multi-Protocol Label Switching or MPLS.
-If you have any questions please contact our tech support either 
-at techsupport@gmail.com or at tel. numbers +1 718 222 2222 or at +33 1 09 75 83 51. For the lastest information
-please visit our web site at https://company.com. The web presentation is developed using HTML's code exclusively.
-The FakeCompany Ltd. (FCMP) is developing different products. There are many products produces by the company FCMP.
-FCMP also offers various services in their domain of business.
-"""
 
 PATTERNS = {
     "email": re.compile(r"([^\x00-\x20\x22\x28\x29\x2c\x2e\x3a-\x3c\x3e\x40\x5b-\x5d\x7f-\xff]+|" + \
@@ -62,7 +55,7 @@ COMMON_ACRONYMS = [
 ENTITY_DESC = {
     "ORG": ("Company", string),
     "LOC": ("Location", string),
-    "PERS": ("Person", string),
+    "PERSON": ("Person", string),
     "IPv4": ("IPv4 Address", int),
     "IPv6": ("IPv6 Address", int),
     "PHONE": ("Phone Number", int),
@@ -73,11 +66,22 @@ ENTITY_DESC = {
     "URL": ("URL Address", int)
 }
 
+DEFAULT_PYMUPDF_FONTS = [
+    "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
+    "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+    "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
+    "Symbol", "ZapfDingbats"
+]
+
+DEFAULT_PYMUPDF_FONT = "Segoe UI" 
+
 
 def find_matching_entities(doc, regex, label):
     matches = regex.finditer(doc.text)
     spans = [doc.char_span(match.start(), match.end(), label=label) for match in matches]
-    doc.ents = list(doc.ents) + spans
+    spans = [s for s in spans if s is not None]
+    spans = filter_spans(list(doc.ents) + spans)
+    doc.ents = spans
     return doc
 
 
@@ -127,6 +131,12 @@ def url_component(doc):
     return doc
 
 
+@Language.component("custom_sentencizer")
+def get_sentencizer(doc):
+    sentencizer = Sentencizer(punct_chars=[r"\n"])
+    return sentencizer(doc)
+
+
 def get_spans_similarity(span1, span2, text_encoder):
     span1_embedding = text_encoder.encode(span1)
     span2_embedding = text_encoder.encode(span2)
@@ -149,48 +159,62 @@ def check_common_acronyms(span_text, common_acronyms, text_encoder, similarity_s
 
 
 def get_most_similar_text(texts_to_compare, texts, text_encoder, similarity_score_threshold=0.95):
-    curr_max_similarity = 0
     most_similar_text = None
-    for text1 in texts_to_compare:
-        for text2 in texts:
-            if isinstance(text2, tuple):
-                text_similarity_score = max(
-                    get_spans_similarity(text2[0], text1, text_encoder),
-                    get_spans_similarity(text2[1], text1, text_encoder))
-            else:
-                text_similarity_score = get_spans_similarity(text2, text1, text_encoder)       
-            if (text_similarity_score > curr_max_similarity) and \
-                (text_similarity_score > similarity_score_threshold):
-                most_similar_text = text2
-                curr_max_similarity = text_similarity_score
+    
+    if (texts_to_compare is not None) and (texts is not None):
+        curr_max_similarity = 0
+        for text1 in texts_to_compare:
+            for text2 in texts:
+                if isinstance(text2, tuple):
+                    text_similarity_score = max(
+                        get_spans_similarity(text2[0], text1, text_encoder),
+                        get_spans_similarity(text2[1], text1, text_encoder))
+                else:
+                    text_similarity_score = get_spans_similarity(text2, text1, text_encoder)       
+                if (text_similarity_score > curr_max_similarity) and \
+                    (text_similarity_score > similarity_score_threshold):
+                    most_similar_text = text2
+                    curr_max_similarity = text_similarity_score
 
     return most_similar_text
 
 
-def get_ent_replacement(ent, suffix_type, entities_count):
+def get_ent_replacement(ent, suffix_type, entities_count=0):
     if suffix_type is string:
-        return (f"\"{ENTITY_DESC[ent.label_][0]} {string.ascii_uppercase[entities_count]}\"", ent.sent, ent.start_char, ent.end_char)
+        suffix = int(round(entities_count / len(string.ascii_uppercase))) * "A" + \
+            string.ascii_uppercase[entities_count % len(string.ascii_uppercase)]
+        return (
+            f"\"{ENTITY_DESC[ent.label_][0]} {suffix}\"", 
+            ent.start_char,
+            ent.end_char,
+            ent.sent.start_char,
+            ent.sent.end_char
+        )
     elif suffix_type is int:
-        return (f"\"{ENTITY_DESC[ent.label_][0]} {entities_count+1}\"", ent.sent, ent.start_char, ent.end_char)
+        return (
+            f"\"{ENTITY_DESC[ent.label_][0]} {entities_count+1}\"", 
+            ent.start_char,
+            ent.end_char,
+            ent.sent.start_char,
+            ent.sent.end_char
+        )
     else:
         raise Exception(f"Unsupported suffix type '{suffix_type}")
              
 
 def get_closest_ent_name(texts, ent_cat_subs, relations, text_encoder):
     relation = get_most_similar_text(texts, relations, text_encoder)
-    closest_key_name = None
+    closest_ent_name = None
     if relation:
-        closest_key_name = relation[0] if relation[0] in ent_cat_subs \
+        closest_ent_name = relation[0] if relation[0] in ent_cat_subs \
             else relation[1] if relation[1] in ent_cat_subs \
             else None
-        if not closest_key_name:
-            closest_key_name = get_most_similar_text(texts, list(ent_cat_subs.keys()), text_encoder)
-    return closest_key_name
+        if not closest_ent_name:
+            closest_ent_name = get_most_similar_text(texts, ent_cat_subs, text_encoder)
+    return closest_ent_name
 
 
-def get_entities_subs(ents, relations, common_acronyms, text_encoder):
-    subs = {}
-    
+def update_subs(subs, ents, relations, common_acronyms, text_encoder, paragraph_index):
     for ent in ents:
         if ent.label_ not in ENTITY_DESC:
             continue
@@ -198,23 +222,64 @@ def get_entities_subs(ents, relations, common_acronyms, text_encoder):
             acronym = check_common_acronyms(ent.text, common_acronyms, text_encoder)
             if acronym:
                 continue
-        ent_cat_subs = subs.get(ent.label_, {})
-        ent_sub = ent_cat_subs.get(ent.text)
-        if ent_sub is None:
-            if ent.label_ == "ORG":
-                relation = get_most_similar_text([ent.text], relations, text_encoder)
-                if relation:
-                    closest_key_name = get_closest_ent_name([ent.text, *relation], ent_cat_subs, relations, text_encoder)
-                    if closest_key_name:
-                        ent_cat_subs[ent.text] = [(ent_cat_subs[closest_key_name][0][0], ent.sent, ent.start_char, ent.end_char)]
-                        continue
-            suffix_type = ENTITY_DESC[ent.label_][1]
-            ent_cat_subs[ent.text] = [get_ent_replacement(ent, suffix_type, len(ent_cat_subs))]
+        ent_subs = subs.get(ent.label_, {})
+        suffix_type = ENTITY_DESC[ent.label_][1]
+            
+        if ent.label_ == "ORG":
+            texts_to_compare = [ent.text]
+            relation = get_most_similar_text([ent.text], relations, text_encoder)
+            if relation:
+                texts_to_compare.extend([i for i in relation])
+            closest_key_name = get_closest_ent_name(texts_to_compare, ent_subs, relations + list(ent_subs.keys()), text_encoder)
+
+            if closest_key_name:
+                ent_replacements = ent_subs[closest_key_name]
+                ent_replacements.append((
+                    # Pick the first replacement item for the entity 
+                    # name and select its replacement string
+                    ent_subs[closest_key_name][0][0],
+                    ent.start_char,
+                    ent.end_char,
+                    ent.sent.start_char,
+                    ent.sent.end_char,
+                    paragraph_index
+                ))
+                continue
+
+            ent_subs[ent.text] = [(*get_ent_replacement(ent, suffix_type, len(subs.get(ent.label_, {}).keys())), paragraph_index)]
         else:
-            ent_sub.append((ent_sub[-1][0], ent.sent, ent.start_char, ent.end_char))
-        subs[ent.label_] = ent_cat_subs
+            if ent.text in ent_subs:
+                replacements = ent_subs[ent.text]
+                replacements.append((
+                    replacements[0][0],
+                    ent.start_char,
+                    ent.end_char,
+                    ent.sent.start_char,
+                    ent.sent.end_char,
+                    paragraph_index
+                ))
+            else:
+                replacements = [(*get_ent_replacement(ent, suffix_type, len(subs.get(ent.label_, {}).keys())), paragraph_index)]
+                ent_subs[ent.text] = replacements
+            
+        subs[ent.label_] = ent_subs
 
     return subs
+
+
+def get_lines_subs(subs):
+    lines_subs = {}
+
+    for ent_label in subs:
+        for old_val, occurences_list in subs[ent_label].items():
+            for (new_val, sent_text) in occurences_list:
+                lines = lines_subs.get(sent_text, [])
+                new_item = (ent_label, old_val, new_val)
+                if new_item not in lines:
+                    lines.append(new_item)
+                    lines_subs[sent_text] = lines
+
+    return lines_subs
 
 
 def is_acronym(short_form, long_form_entities):
@@ -251,57 +316,365 @@ def find_short_long_relations(acronyms_ents):
     return relations
 
 
-def substitute_entities(text, subs, min_distance=3):
-    orgs_to_replace = []
-    new_text = text
-    diff = 0
+def get_font_metadata(font_path):
+    font = TTFont(font_path)
+    metadata = {}
+
+    for record in font["name"].names:
+        name = record.toUnicode()
+        metadata[record.nameID] = name
+
+    return {
+        "family": metadata.get(1, "Unknown"),
+        "sub_family": metadata.get(2, "Unknown"),
+        "full_name": metadata.get(4, "Unknown"),
+        "version": metadata.get(5, "Unknown")
+    }
+
+
+def get_font_path(font_name):
+    """Find the system path of a given font by name."""
+    if sys.platform == "win32":
+        font_dirs = [Path("C:/Windows/Fonts")]
+    elif sys.platform == "darwin":  # macOS
+        font_dirs = [Path("~/Library/Fonts").expanduser(), Path("/System/Library/Fonts/Supplemental"), Path("/Library/Fonts")]
+    else:  # Linux
+        font_dirs = [Path("~/.fonts").expanduser(), Path("/usr/share/fonts"), Path("/usr/local/share/fonts")]
+
+    for font_dir in font_dirs:
+        if font_dir.exists():
+            for font_path in font_dir.rglob("*.ttf"):
+                font_metadata = get_font_metadata(font_path)
+                if font_name == f"{font_metadata['family']}" or \
+                   font_name == f"{font_metadata["family"]}-{font_metadata["sub_family"]}":
+                    return str(font_path)
+
+    return None
+
+
+def load_font(font_name):
+    font_path = get_font_path(font_name)
+    if font_path:
+        with open(font_path, "rb") as fh:
+            return io.BytesIO(fh.read())
+
+    return None
+
+
+def get_iou(bbox1, bbox2):
+    x0, y0, x1, y1 = bbox1
+    xx0, yy0, xx1, yy1 = bbox2
+    max_x0 = max(x0, xx0)
+    max_y0 = max(y0, yy0)
+    min_x1 = min(x1, xx1)
+    min_y1 = min(y1, yy1)
+    intersection_area = (min_x1 - max_x0) * (min_y1 - max_y0)
+    union_area = (x1 - x0) * (y1 - y0) + (xx1 - xx0) * (yy1 - yy0) - intersection_area
     
-    for ent_type in subs:
-        for old_val, occurences_list in subs[ent_type].items():
-            for (new_val, sent, start_char, end_char) in occurences_list:
-                if ent_type == "ORG":
-                    if orgs_to_replace:
-                        last_org_name, last_org_sent, last_org_start_char, last_org_end_char = orgs_to_replace[-1]
-                        if (start_char - last_org_end_char <= min_distance) and \
-                            (last_org_name == new_val) and \
-                            (last_org_sent == sent):
-                            if text[end_char] == ")":
-                                end_char += 1
-                            orgs_to_replace[-1] = (last_org_name, last_org_sent, last_org_start_char, end_char)
+    return intersection_area / union_area
+
+
+def is_span_a_link(line_subs, links, iou_thres=0.5):
+    overlapping_links = []
+    for line_sub in line_subs:
+        for link in links:
+            iou = get_iou(line_sub["spans_bbox"], link["from"])
+            if iou > iou_thres:
+                overlapping_links.append(link)
+    return overlapping_links
+
+
+def get_updated_text(line_subs):
+    updated_text = line_subs[0]["text"]
+
+    for sub in line_subs:
+        new_val = sub["new_val"]
+        old_val = sub["old_val"]
+        if len(new_val) < len(old_val):
+            if sub["ent_start_char"] == 0:
+                new_val = new_val.ljust(len(old_val))
+            elif sub["ent_end_char"] == (sub["end_char"]-sub["start_char"]):
+                new_val = new_val.rjust(len(old_val))
+            else:
+                new_val = new_val.center(len(old_val))
+        elif len(new_val) > len(old_val):
+            new_val_parts = new_val.split(" ")
+            stripped_chars_count = len(new_val)-len(old_val)
+            new_val = " ".join(new_val_parts[:-1])[:-(stripped_chars_count+1)] + ". " + new_val_parts[-1] 
+        updated_text = updated_text[:sub["ent_start_char"]] + \
+            new_val + updated_text[sub["ent_end_char"]:]
+        
+    return updated_text
+        
+
+def replace_text(pdf, page_num, line_subs, page_hyperlinks):
+    if line_subs:
+        updated_text = get_updated_text(line_subs)
+        x, y = line_subs[0]["origin"]
+        xb0, yb0, xb1, yb1 = line_subs[0]["spans_bbox"]#line_bbox#line_subs["bbox"]
+        rect = fitz.Rect(xb0, yb0, xb1, yb1)
+        page = pdf[page_num]#pdf[line_subs["page_number"]]
+        page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
+
+        text_color = line_subs[0]["color"] if isinstance(line_subs[0]["color"], tuple) \
+            else [round(c/255.0, 2) for c in fitz.sRGB_to_rgb(line_subs[0]["color"])]
+        kwargs = dict(fontsize=line_subs[0]["size"], 
+                      color=text_color, 
+                      fill_opacity=line_subs[0]["alpha"])
+        
+        if line_subs[0]["font"] in DEFAULT_PYMUPDF_FONTS:
+            kwargs["fontname"] = line_subs[0]["font"]
+        else:
+            font_path = get_font_path(line_subs[0]["font"])
+            if font_path:
+                kwargs["fontfile"] = font_path
+            else:
+                kwargs["fontfile"] = get_font_path(DEFAULT_PYMUPDF_FONT)
+
+        page.insert_text((x, y), updated_text, **kwargs)
+        if links := is_span_a_link(line_subs, page_hyperlinks):
+            for link in links:
+                page.delete_link(link)
+
+
+def substitute_page_entities(pdf, lines_subs, min_distance=3):
+    for (page_num, _), occurences in lines_subs.items():
+        replacements = []
+        orgs_to_replace = []
+        page_hyperlinks = pdf[page_num].get_links()
+    
+        for line_subs in occurences:
+            if line_subs["label_type"] == "ORG":
+                if orgs_to_replace:
+                    last_org = orgs_to_replace[-1]
+                    if line_subs["text"] == last_org["text"]:
+                        # It's assumed that the input text into the spaCy's model is at least 
+                        # normalized to lower case characters.
+                        lower_case_sent = last_org["text"].lower()
+                        if (line_subs["ent_start_char"] - last_org["ent_end_char"] <= min_distance) and \
+                            (last_org["new_val"] == line_subs["new_val"]):
+                            # The new ORG will not be added, instead the previous ORG's ending character index 
+                            # will be expanded so that it includes the new ORG. 
+                            new_org_end_char = line_subs["ent_end_char"]
+                            if lower_case_sent[new_org_end_char + 1] == ")":
+                                new_org_end_char += 1
+                            orgs_to_replace[-1]["ent_end_char"] = new_org_end_char
                             continue
-                    orgs_to_replace.append((new_val, sent, start_char, end_char))
-                else:
-                    new_text = new_text[:start_char+diff] + new_val + new_text[end_char+diff:]
-                    diff += len(new_val) - (end_char - start_char)
+                orgs_to_replace.append(line_subs)
+            else:
+                #line_text_orig = re.sub(r"\s.\s?$", "", line)
+                #old_val_orig = re.sub(r"\s.\s?$", "", old_val)
+                replacements.append(line_subs)
 
-    for org in orgs_to_replace:
-        new_org_name, _, org_start_char, org_end_char = org
-        new_text = new_text[:org_start_char+diff] + new_org_name + new_text[org_end_char+diff:]
-        diff += len(new_org_name) - (org_end_char - org_start_char)
-    
-    return new_text
+        for org_line_sub in orgs_to_replace:
+            replacements.append(line_subs)
+            #sent_text_orig = re.sub(r"\s.\s?$", "", sent_text)
+            #old_org_name_orig = re.sub(r"\s.\s?$", "", old_org_name)
+
+        replace_text(pdf, page_num, replacements, page_hyperlinks)
 
 
-if __name__ == "__main__":
+def run_nlp(paragraphs):
     nlp = spacy.load("en_core_web_trf")
     nlp_acronyms = spacy.load(consts.ACRONYMS_MODEL_DIR)
+    encoder_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  
 
     components = ["ipv4", "ipv6", "phone", "email", "ssn", "medicare", "vin", "url"]
 
+    ruler = nlp.add_pipe("entity_ruler", before="ner")
+    patterns = [{"label": "DATE", "pattern": [{"TEXT": {"REGEX": r"\d{1,2}/\d{1,2}/\d{4}"}}]}]
+    ruler.add_patterns(patterns)
+
+    #nlp.add_pipe("custom_sentencizer", before="parser")
+    nlp.add_pipe('sentencizer')
     nlp_acronyms.add_pipe('sentencizer')
     for c in components:
         nlp.add_pipe(c, last=True)
 
-    doc = nlp(text)
-    acronyms_doc = nlp_acronyms(text)
+    subs = {} 
+    for idx, paragraph in enumerate(paragraphs):
+        doc = nlp(get_normalized_text(paragraph["text"]))
+        acronyms_doc = nlp_acronyms(paragraph["text"])
 
-    relations = find_short_long_relations(acronyms_doc.ents)
+        relations = find_short_long_relations(acronyms_doc.ents)
 
-    for ent in doc.ents:
-        print(ent.text, ent.label_)
+        for ent in doc.ents:
+            print(ent.text, ent.label_)
 
-    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-    subs = get_entities_subs(doc.ents, relations, COMMON_ACRONYMS, model)
-    new_text = substitute_entities(text, subs)
+        update_subs(subs, doc.ents, relations, COMMON_ACRONYMS, encoder_model, idx)
 
-    print(new_text)
+    lines_subs = map_subs_to_lines(subs, paragraphs)
+
+    return lines_subs
+
+
+def get_pdf_text(pdf):
+    raw_text = ""
+
+    for page in pdf:
+        raw_text += page.get_text("text") + "\n"
+
+    return raw_text
+
+
+def get_pdf_spans(pdf):
+    pdf_spans = {}
+    
+    for page in pdf:    
+        spans = get_pdf_page_spans(page)
+        for span, occurences in spans.items():
+            if span in pdf_spans:
+                pdf_spans[span].extend(occurences)
+            else:
+                pdf_spans[span] = occurences
+
+    return pdf_spans
+
+
+def get_pdf_span_boundaries(span):
+    a = span["ascender"]
+    d = span["descender"]
+    r = fitz.Rect(span["bbox"])
+    o = fitz.Point(span["origin"])
+    r.y1 = o.y - span["size"] * d / (a - d)
+    r.y0 = r.y1 - span["size"]
+
+    return r
+
+
+def get_pdf_page_spans(page):
+    pdf_spans = {}
+    blocks = page.get_text("dict")["blocks"]
+
+    for block_idx, block in enumerate(blocks):
+        is_text_block = block["type"] == 0
+        if is_text_block:
+            for line_idx, line in enumerate(block["lines"]):
+                line_text = ""
+                spans = []
+                for span in line["spans"]:
+                    span_text = span["text"]
+                    if span_text.strip() != "":
+                        spans.append({
+                            "page_number": page.number,
+                            "block_index": block_idx,
+                            "line_index": line_idx,
+                            "size": span["size"],
+                            "font": span["font"],#"helv", # Temporarly use the 'helv' font instead of the span["font"],
+                            "color": span["color"],
+                            "alpha": span["alpha"],
+                            "origin": span["origin"],
+                            "bbox": span["bbox"],
+                            "span_bbox": get_pdf_span_boundaries(span),
+                            # Use original text instead of the whitespaces the stripped text 
+                            # will be used to match tet of sentences returned by the spaCy model.
+                            "text": span_text
+                        })
+                        line_text += span_text
+                if line_text != "":
+                    line_span = spans[0].copy()
+                    line_span["bbox"] = line["bbox"]
+                    spans_max_y = max([s["span_bbox"][-1] for s in spans])
+                    line_span["spans_bbox"] = ((spans[0]["span_bbox"][0], spans[0]["span_bbox"][1], spans[-1]["span_bbox"][-2], spans_max_y))
+                    line_span["text"] = line_text
+                    key_name = line_text
+                    occurences = pdf_spans.get(key_name, [])
+                    occurences.extend([line_span])
+                    pdf_spans[key_name] = occurences
+
+    return pdf_spans
+
+
+def get_normalized_text(text):
+    return text.lower()
+
+
+def extract_pdf_text(pdf, line_gap_threshold=5):
+    all_paragraphs = []
+    sorted_lines = []
+
+    pdf_spans = get_pdf_spans(pdf)
+    for line, infos in pdf_spans.items():
+        for line_info in infos:
+            temp_line_info = line_info.copy()
+            sorted_lines.append(temp_line_info)
+
+    sorted_lines = list(sorted(sorted_lines, key=lambda l: (l["page_number"], l["spans_bbox"][-1])))
+
+    paragraphs = []
+    current_paragraph = []
+    last_y = None
+    char_offset = 0
+    
+    for line in sorted_lines:
+        x0, y0, x1, y1 = line["spans_bbox"]
+
+        if last_y is not None and (y0 - last_y) > line_gap_threshold:
+            if current_paragraph:
+                paragraphs.append(current_paragraph)
+            current_paragraph = []
+            char_offset = 0
+
+        temp_line = line.copy()
+        temp_line["spans_bbox"] = (x0, y0, x1, y1)
+        temp_line["start_char"] = char_offset
+        temp_line["end_char"] = char_offset + len(line["text"])
+        current_paragraph.append(temp_line)
+        # Each line will be separated by a whitespace character.
+        char_offset += len(line["text"]) + 1
+        last_y = y1
+
+    if current_paragraph:
+        paragraphs.append(current_paragraph)
+
+    for paragraph in paragraphs:
+        text = " ".join([line["text"] for line in paragraph])
+        all_paragraphs.append(dict(text=text, 
+                                   lines=paragraph, 
+                                   page_number=paragraph[0]["page_number"]))
+
+    return all_paragraphs
+
+
+def map_subs_to_lines(subs, paragraph):
+    lines_subs = {}
+
+    for label_type in subs:
+        for old_val, replacements in subs[label_type].items():
+            for (new_val, ent_start, ent_end, _, _, paragraph_index) in replacements:
+                for line in paragraph[paragraph_index]["lines"]:
+                    if (ent_start >= line["start_char"]) and \
+                        (ent_end <= line["end_char"]):
+                        line_subs = lines_subs.get((line["page_number"], line["bbox"]), [])
+                        temp_line = line.copy()
+                        temp_line["label_type"] = label_type
+                        temp_line["ent_start_char"] = ent_start - line["start_char"]
+                        temp_line["ent_end_char"] = ent_end - line["start_char"]
+                        temp_line["old_val"] = old_val
+                        temp_line["new_val"] = new_val
+                        line_subs.append(temp_line)
+                        lines_subs[(line["page_number"], line["bbox"])] = line_subs
+
+    return lines_subs
+
+
+def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf")):
+    input_file_path = Path(input_file)
+    pdf = fitz.open(input_file_path.absolute().as_posix())
+    paragraphs = extract_pdf_text(pdf)
+    lines_subs = run_nlp(paragraphs)
+    substitute_page_entities(pdf, lines_subs)
+    pdf.subset_fonts()
+    output_file_path = Path(output_file)
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf.ez_save(output_file_path.absolute().as_posix())
+    pdf.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input", type=str, required=True)
+    parser.add_argument("-o", "--output", type=str)
+    args = parser.parse_args()
+    
+    main(args.input, args.output)
