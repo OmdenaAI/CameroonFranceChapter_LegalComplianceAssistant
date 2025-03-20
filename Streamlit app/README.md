@@ -25,23 +25,21 @@ pip install -r requirements.txt
 
 ## How to Run the App
 
-    Clone or download this repository.
+- Clone or download this repository.
+- Navigate to the folder containing the app.py file.
+- Run the following command to start the Streamlit app:
 
-    Navigate to the folder containing the app.py file.
+```
+streamlit run app.py
+```
 
-    Run the following command to start the Streamlit app:
-
-    ```
-    streamlit run app.py
-    ```
-
-    Once the app is running, open your browser and go to http://localhost:8501.
+- Once the app is running, open your browser and go to http://localhost:8501.
 
 ## File Handling
 
-    Text Files (.txt): Content is read directly from the file and displayed.
-    PDF Files (.pdf): Content is extracted using the PyPDF2 library.
-    Word Documents (.docx): Content is extracted using the python-docx library.
+- Text Files (.txt): Content is read directly from the file and displayed.
+- PDF Files (.pdf): Content is extracted using the PyPDF2 library.
+- Word Documents (.docx): Content is extracted using the python-docx library.
 
 ## License
 
