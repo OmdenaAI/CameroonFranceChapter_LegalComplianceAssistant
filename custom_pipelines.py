@@ -8,12 +8,15 @@ import string
 import consts
 import argparse
 import tempfile
+from PIL import Image
 from pathlib import Path
 from fontTools.ttLib import TTFont
 from spacy.util import filter_spans
 from spacy.language import Language
 from spacy.pipeline import EntityRuler, Sentencizer
 from sentence_transformers import SentenceTransformer
+
+fitz.TOOLS.set_small_glyph_heights(True)
 
 
 PATTERNS = {
@@ -73,7 +76,13 @@ DEFAULT_PYMUPDF_FONTS = [
     "Symbol", "ZapfDingbats"
 ]
 
-DEFAULT_PYMUPDF_FONT = "Segoe UI" 
+DEFAULT_TEXT_MEASUREMENT_FONT = "helv"
+DEFAULT_PYMUPDF_FONT = {
+    "normal": "Segoe UI",
+    "italic": "Segoe UI Italic",
+    "bold": "Segoe UI Bold"
+}
+DEFAULT_FONT_SIZE = 11
 
 
 def find_matching_entities(doc, regex, label):
@@ -230,7 +239,8 @@ def update_subs(subs, ents, relations, common_acronyms, text_encoder, paragraph_
             relation = get_most_similar_text([ent.text], relations, text_encoder)
             if relation:
                 texts_to_compare.extend([i for i in relation])
-            closest_key_name = get_closest_ent_name(texts_to_compare, ent_subs, relations + list(ent_subs.keys()), text_encoder)
+            temp_relations = (relations if relations else []) + list(ent_subs.keys())
+            closest_key_name = get_closest_ent_name(texts_to_compare, ent_subs, temp_relations, text_encoder)
 
             if closest_key_name:
                 ent_replacements = ent_subs[closest_key_name]
@@ -368,7 +378,7 @@ def get_iou(bbox1, bbox2):
     max_y0 = max(y0, yy0)
     min_x1 = min(x1, xx1)
     min_y1 = min(y1, yy1)
-    intersection_area = (min_x1 - max_x0) * (min_y1 - max_y0)
+    intersection_area = max((min_x1 - max_x0) * (min_y1 - max_y0), 0)
     union_area = (x1 - x0) * (y1 - y0) + (xx1 - xx0) * (yy1 - yy0) - intersection_area
     
     return intersection_area / union_area
@@ -405,43 +415,154 @@ def get_updated_text(line_subs):
             new_val + updated_text[sub["ent_end_char"]:]
         
     return updated_text
-        
 
-def replace_text(pdf, page_num, line_subs, page_hyperlinks):
+
+def get_text_length(text, font_name=DEFAULT_PYMUPDF_FONT, font_size=DEFAULT_FONT_SIZE):
+    if font_name not in DEFAULT_PYMUPDF_FONTS or \
+        font_name in DEFAULT_PYMUPDF_FONT.values() or \
+            not get_font_path(font_name):
+        font_name = DEFAULT_TEXT_MEASUREMENT_FONT
+        
+    return sum([fitz.get_text_length(c, fontname=font_name, fontsize=font_size) 
+                for c in text])
+
+
+def get_spans_text_length(spans):
+    text_len = 0
+
+    for span in spans:
+        text_len += get_text_length(span["text"], span["font"], span["size"])
+
+    return text_len
+
+
+def get_redacted_text(line_subs, redact_char="x"):
+    redacted_text = line_subs[0]["text"]
+    offset = 0
+    sorted_line_subs = list(sorted(line_subs, key=lambda i: i["ent_start_char"], reverse=True))
+
+    for sub in sorted_line_subs:
+        font = sub["spans"][0]["font"]
+        size = sub["spans"][0]["size"]
+        
+        new_val = len(sub["old_val"]) * redact_char
+        while get_text_length(new_val, font_name=font, font_size=size) >= \
+            get_text_length(sub["old_val"], font_name=font, font_size=size):
+            new_val = new_val[:-1]
+        redacted_text = redacted_text[:sub["ent_start_char"] + offset] + \
+            new_val + redacted_text[sub["ent_end_char"] + offset:]
+
+    return redacted_text
+
+
+def add_redact_annots(page, line_subs, use_span_bg=True, fill_color=(0, 0, 0)):
+    annots = []
+
     if line_subs:
-        updated_text = get_updated_text(line_subs)
-        x, y = line_subs[0]["origin"]
-        xb0, yb0, xb1, yb1 = line_subs[0]["spans_bbox"]#line_bbox#line_subs["bbox"]
-        rect = fitz.Rect(xb0, yb0, xb1, yb1)
-        page = pdf[page_num]#pdf[line_subs["page_number"]]
-        page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
+        for line_sub in line_subs:
+            rects = page.search_for(line_sub["old_val"], clip=line_sub["spans_bbox"], quads=False, flags=0)
+            for r in rects:
+                draw_redact_rect = [r[0], line_sub["spans_bbox"][1] - 2, r[2], line_sub["spans_bbox"][3]]
+                center_y = r[1] + (r[3] - r[1]) / 2
+                redact_rect = [r[0], center_y - 0.1, r[2], center_y + 0.1]
+                annots.append((draw_redact_rect, line_sub))
+                redact_annot_color = line_sub["sub_spans"][0]["fill_color"] if use_span_bg else fill_color
+                page.add_redact_annot(redact_rect, fill=redact_annot_color)
+    
+    return annots
 
-        text_color = line_subs[0]["color"] if isinstance(line_subs[0]["color"], tuple) \
-            else [round(c/255.0, 2) for c in fitz.sRGB_to_rgb(line_subs[0]["color"])]
-        kwargs = dict(fontsize=line_subs[0]["size"], 
-                      color=text_color, 
-                      fill_opacity=line_subs[0]["alpha"])
+
+def fill_bg(page, line):
+    for span in line["spans"]:
+        page.draw_rect(span["span_bbox"], color=span["fill_color"], fill=span["fill_color"])
+
+
+def replace_text(page, line, text):
+    for span in line["spans"]:
+        text_color = span["color"] if isinstance(span["color"], tuple) \
+            else [round(c/255.0, 2) for c in fitz.sRGB_to_rgb(span["color"])]
+        kwargs = dict(fontsize=span["size"], 
+                    color=text_color, 
+                    fill_opacity=span["alpha"])
         
-        if line_subs[0]["font"] in DEFAULT_PYMUPDF_FONTS:
-            kwargs["fontname"] = line_subs[0]["font"]
+        font_name = span["font"]
+        if span["font"] in DEFAULT_PYMUPDF_FONTS:
+            kwargs["fontname"] = font_name
         else:
-            font_path = get_font_path(line_subs[0]["font"])
+            font_path = get_font_path(font_name)
             if font_path:
                 kwargs["fontfile"] = font_path
             else:
-                kwargs["fontfile"] = get_font_path(DEFAULT_PYMUPDF_FONT)
+                font_name = DEFAULT_PYMUPDF_FONT["bold"] if "bold" in font_name \
+                    else DEFAULT_PYMUPDF_FONT["italic"] if "italic" in font_name \
+                    else DEFAULT_PYMUPDF_FONT["normal"]
+                kwargs["fontfile"] = get_font_path(font_name)
+        span_length = span["span_bbox"][2] - span["span_bbox"][0]
+        length_ratio = get_text_length(text[span["text_start"]:span["text_end"]], 
+                                        font_name=font_name, 
+                                        font_size=span["size"]) / span_length
+        if length_ratio == 0.0:
+            length_ratio = 1.0
+        kwargs["fontsize"] = span["size"] / length_ratio    
+        x, y = span["origin"]
+        page.insert_text((x, y), text[span["text_start"]:span["text_end"]], **kwargs)
 
-        page.insert_text((x, y), updated_text, **kwargs)
-        if links := is_span_a_link(line_subs, page_hyperlinks):
-            for link in links:
-                page.delete_link(link)
 
+def is_neighbouring_line(line, lines):
+    for line_idx in lines:
+        if abs(line["paragraph_line_index"] - line_idx) == 1:
+            return True
+    return False
+
+
+def get_redacted_paragraphs(replacements):
+    redacted_paragraphs = {}
+
+    for redact_rect, replacement in replacements:
+        key = (replacement["page_number"], replacement["paragraph_index"])
+        parag_replacements = redacted_paragraphs.get(key, [])
+        parag_replacements.append((redact_rect, replacement))
+        redacted_paragraphs[key] = parag_replacements
+
+    return redacted_paragraphs
+
+
+def draw_paragraph_annots(page, line, redacted_lines, parag_replacements, redact_rect_color=(0, 0, 0)):
+    if line["paragraph_line_index"] in redacted_lines:
+        line_subs = [r for r in parag_replacements 
+                        if r[1]["paragraph_line_index"] == line["paragraph_line_index"]]
+        for redact_rect, _ in line_subs:
+            page.draw_rect(redact_rect,
+                                    color=redact_rect_color,
+                                    fill=redact_rect_color)
+            
+
+def reconstruct_deleted_text(pdf, replacements, paragraphs):
+    redacted_paragraphs = get_redacted_paragraphs(replacements)
+
+    for (page_num, paragraph_index), parag_replacements in redacted_paragraphs.items():
+        redacted_lines = [r[1]["paragraph_line_index"] for r in parag_replacements]
+
+        for line in paragraphs[paragraph_index]["lines"]:
+            if line["paragraph_line_index"] in redacted_lines or \
+                is_neighbouring_line(line, redacted_lines):
+                if line["paragraph_line_index"] in redacted_lines:
+                    text = get_redacted_text([r[1] for r in parag_replacements 
+                                              if r[1]["paragraph_line_index"] == line["paragraph_line_index"]])
+                else:
+                    text = line["text"]
+
+                fill_bg(pdf[page_num], line)                
+                replace_text(pdf[page_num], line, text)
+                draw_paragraph_annots(pdf[page_num], line, redacted_lines, parag_replacements)
+                
 
 def substitute_page_entities(pdf, lines_subs, min_distance=3):
+    all_replacements = []
+
     for (page_num, _), occurences in lines_subs.items():
         replacements = []
         orgs_to_replace = []
-        page_hyperlinks = pdf[page_num].get_links()
     
         for line_subs in occurences:
             if line_subs["label_type"] == "ORG":
@@ -467,11 +588,21 @@ def substitute_page_entities(pdf, lines_subs, min_distance=3):
                 replacements.append(line_subs)
 
         for org_line_sub in orgs_to_replace:
-            replacements.append(line_subs)
+            replacements.append(org_line_sub)
             #sent_text_orig = re.sub(r"\s.\s?$", "", sent_text)
             #old_org_name_orig = re.sub(r"\s.\s?$", "", old_org_name)
 
-        replace_text(pdf, page_num, replacements, page_hyperlinks)
+        page = pdf[page_num]
+
+        if replacements:
+            annots = add_redact_annots(page, replacements)
+            if annots:
+                page.apply_redactions()
+                for (draw_redact_rect, _) in annots:
+                    page.draw_rect(draw_redact_rect, color=(0, 0, 0), fill=(0, 0, 0))
+                all_replacements.extend(annots)
+
+    return all_replacements
 
 
 def run_nlp(paragraphs):
@@ -542,9 +673,31 @@ def get_pdf_span_boundaries(span):
     return r
 
 
+def get_fill_color(span_bbox, rectangles, margin=1.5, iou_threshold=0.35):
+    expanded_span_bbox = tuple(i + j for i, j in zip(span_bbox, (-margin, -margin, margin, margin)))
+    intersect_rects = list(filter(lambda i: fitz.Rect(i["rect"]).intersects(expanded_span_bbox),
+                                  rectangles))
+    fill_color = (1, 1, 1)
+
+    if intersect_rects:
+        iou = get_iou(intersect_rects[0]["rect"], span_bbox)
+        best_iou = iou if iou > iou_threshold else 0
+        fill_color = intersect_rects[0]["fill"] if iou > 0 else fill_color 
+
+        for rect in intersect_rects[1:]:
+            iou = get_iou(rect["rect"], span_bbox)
+            if iou > best_iou and iou > iou_threshold:
+                best_iou = iou
+                fill_color = rect["fill"]
+        
+    return fill_color
+
+
 def get_pdf_page_spans(page):
     pdf_spans = {}
     blocks = page.get_text("dict")["blocks"]
+    drawings = list(sorted(page.get_drawings(), key=lambda i: i["rect"][0]))
+    rectangles = [r for r in drawings if r["items"][0][0] == "re"]
 
     for block_idx, block in enumerate(blocks):
         is_text_block = block["type"] == 0
@@ -555,32 +708,40 @@ def get_pdf_page_spans(page):
                 for span in line["spans"]:
                     span_text = span["text"]
                     if span_text.strip() != "":
+                        span_bbox = get_pdf_span_boundaries(span)
+                        fill_color = get_fill_color(span_bbox, rectangles)
+
+                        if fill_color != (1.0, 1.0, 1.0):
+                            print(f"Text: {span['text']}, fill color: {fill_color}")
+
                         spans.append({
-                            "page_number": page.number,
-                            "block_index": block_idx,
-                            "line_index": line_idx,
                             "size": span["size"],
                             "font": span["font"],#"helv", # Temporarly use the 'helv' font instead of the span["font"],
                             "color": span["color"],
+                            "fill_color": fill_color,
                             "alpha": span["alpha"],
                             "origin": span["origin"],
                             "bbox": span["bbox"],
-                            "span_bbox": get_pdf_span_boundaries(span),
+                            "span_bbox": span_bbox,#get_pdf_span_boundaries(span),
                             # Use original text instead of the whitespaces the stripped text 
                             # will be used to match tet of sentences returned by the spaCy model.
-                            "text": span_text
+                            "text": span_text,
+                            "text_start": len(line_text),
+                            "text_end": len(line_text) + len(span_text)
                         })
                         line_text += span_text
                 if line_text != "":
-                    line_span = spans[0].copy()
-                    line_span["bbox"] = line["bbox"]
+                    line_info = {"page_number": page.number}
+                    line_info["block_index"] = block_idx
+                    line_info["line_index"] = line_idx
+                    line_info["line_bbox"] = line["bbox"]
                     spans_max_y = max([s["span_bbox"][-1] for s in spans])
-                    line_span["spans_bbox"] = ((spans[0]["span_bbox"][0], spans[0]["span_bbox"][1], spans[-1]["span_bbox"][-2], spans_max_y))
-                    line_span["text"] = line_text
-                    key_name = line_text
-                    occurences = pdf_spans.get(key_name, [])
-                    occurences.extend([line_span])
-                    pdf_spans[key_name] = occurences
+                    line_info["spans_bbox"] = ((spans[0]["span_bbox"][0], spans[0]["span_bbox"][1], spans[-1]["span_bbox"][-2], spans_max_y))
+                    line_info["text"] = line_text
+                    line_info["spans"] = spans
+                    occurences = pdf_spans.get(line_text, [])
+                    occurences.extend([line_info])
+                    pdf_spans[line_text] = occurences
 
     return pdf_spans
 
@@ -605,7 +766,8 @@ def extract_pdf_text(pdf, line_gap_threshold=5):
     current_paragraph = []
     last_y = None
     char_offset = 0
-    
+    paragraph_line_index = 0
+
     for line in sorted_lines:
         x0, y0, x1, y1 = line["spans_bbox"]
 
@@ -614,15 +776,19 @@ def extract_pdf_text(pdf, line_gap_threshold=5):
                 paragraphs.append(current_paragraph)
             current_paragraph = []
             char_offset = 0
+            paragraph_line_index = 0
+
 
         temp_line = line.copy()
         temp_line["spans_bbox"] = (x0, y0, x1, y1)
         temp_line["start_char"] = char_offset
         temp_line["end_char"] = char_offset + len(line["text"])
+        temp_line["paragraph_line_index"] = paragraph_line_index
         current_paragraph.append(temp_line)
         # Each line will be separated by a whitespace character.
         char_offset += len(line["text"]) + 1
         last_y = y1
+        paragraph_line_index += 1
 
     if current_paragraph:
         paragraphs.append(current_paragraph)
@@ -636,26 +802,49 @@ def extract_pdf_text(pdf, line_gap_threshold=5):
     return all_paragraphs
 
 
-def map_subs_to_lines(subs, paragraph):
+def map_subs_to_lines(subs, paragraphs):
     lines_subs = {}
 
     for label_type in subs:
         for old_val, replacements in subs[label_type].items():
             for (new_val, ent_start, ent_end, _, _, paragraph_index) in replacements:
-                for line in paragraph[paragraph_index]["lines"]:
+                for line in paragraphs[paragraph_index]["lines"]:
                     if (ent_start >= line["start_char"]) and \
                         (ent_end <= line["end_char"]):
-                        line_subs = lines_subs.get((line["page_number"], line["bbox"]), [])
+                        line_subs = lines_subs.get((line["page_number"], line["line_bbox"]), [])
                         temp_line = line.copy()
                         temp_line["label_type"] = label_type
                         temp_line["ent_start_char"] = ent_start - line["start_char"]
                         temp_line["ent_end_char"] = ent_end - line["start_char"]
                         temp_line["old_val"] = old_val
                         temp_line["new_val"] = new_val
+                        temp_line["paragraph_index"] = paragraph_index
+                        temp_line["sub_spans"] = []
+                        for span in temp_line["spans"]:
+                            if (temp_line["ent_start_char"] >= span["text_start"] and 
+                                temp_line["ent_start_char"] < span["text_end"]) or \
+                               (temp_line["ent_end_char"] > span["text_start"] and 
+                                temp_line["ent_end_char"] <= span["text_end"]):
+                                temp_line["sub_spans"].append(span)
                         line_subs.append(temp_line)
-                        lines_subs[(line["page_number"], line["bbox"])] = line_subs
+                        lines_subs[(line["page_number"], line["line_bbox"])] = line_subs
 
     return lines_subs
+
+
+def extract_pdf_page_images(page):
+    images = []
+
+    for img_index, img in enumerate(page.get_images(full=True)):
+        xref = img[0]
+        base_image = page.parent.extract_image(xref)
+        image_bytes = base_image["image"]
+        images.append({
+            "ext": base_image["ext"], 
+            "data": Image.open(io.BytesIO(image_bytes))
+        })
+
+    return images
 
 
 def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf")):
@@ -663,7 +852,8 @@ def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf")
     pdf = fitz.open(input_file_path.absolute().as_posix())
     paragraphs = extract_pdf_text(pdf)
     lines_subs = run_nlp(paragraphs)
-    substitute_page_entities(pdf, lines_subs)
+    replacements = substitute_page_entities(pdf, lines_subs)
+    reconstruct_deleted_text(pdf, replacements, paragraphs)            
     pdf.subset_fonts()
     output_file_path = Path(output_file)
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
