@@ -7,7 +7,7 @@ import settings
 def replace_text_with_labels(model, input_path):
     doc = fitz.open(input_path)
     fontname = settings.FONT_NAME
-
+    new_entities = {}
     for page_num in range(len(doc)):
         page = doc[page_num]
         full_text = page.get_text()
@@ -21,10 +21,21 @@ def replace_text_with_labels(model, input_path):
         # Sort entities by position (reverse order to avoid coordinate shifts)
         entities.sort(key=lambda x: x["start"], reverse=True)
 
+        # differentiate values
+        for ent in entities:
+            if ent['text'] not in new_entities.values():
+                new_entities[f"{ent['label']}__0"] = ent['text']
+            else:
+                match_keys = [int(k.split("__")[1]) for k in new_entities.keys() if k.split("__")[0] == ent['label']]
+                sorted(match_keys,reverse=True)
+                new_label = match_keys[0] + 1
+                new_entities[f"{ent['label']}__{new_label}"] = ent['text']
         # Replace entities in the PDF
         for entity in entities:
             original_text = entity["text"]
-            label = entity["label"]
+            for key, value in new_entities.items():
+                if(value == original_text):
+                    label = key # change the label
 
             # Find all occurrences of the entity on the page
             text_instances = page.search_for(original_text)
