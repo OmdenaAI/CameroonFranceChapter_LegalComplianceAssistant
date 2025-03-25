@@ -1,0 +1,16 @@
+# Path constants
+INPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/data/pdfs/Detailed_Divorce_Agreement_5.pdf"
+OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/Redacted_pdf.pdf"
+IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/images"
+
+# Gliner constansts
+LABELS = ["Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
+PRIORITY_LABELS = ["Street_Address", "State", "City", "Country"]
+GLINER_MODEL = "urchade/gliner_multi_pii-v1"
+THRESHOLD = 0.5
+FONT_NAME = "Helvetica"
+
+# YOLO Path
+PYTHON_EXEC = "D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/.src_omdena_legal/Scripts/python.exe"
+YOLO_DETECT_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/yolov5/detect.py"
+YOLO_WEIGHTS = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/yolov5/runs/train/exp/weights/best.pt"
