@@ -5,6 +5,8 @@ from inference.gliner_inference import replace_text_with_labels
 from inference.yolo_inference import image_inference_yolo
 from utils.helper import save_pdf
 from utils.helper import convert_pdf_to_images
+from utils.yolo_utils import create_black_bounding_box
+from utils.helper import convert_img_to_pdf
 
 if __name__ == "__main__":
     # # --- Initialize GLiNER ---
@@ -16,4 +18,9 @@ if __name__ == "__main__":
     print(f"Modified PDF saved as {settings.OUTPUT_PDF_PATH}")
     convert_pdf_to_images()
     image_inference_yolo()
+    create_black_bounding_box()
+    convert_img_to_pdf()
+
+
+
 

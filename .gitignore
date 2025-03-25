@@ -1,6 +1,6 @@
 # Ignore the data directory
 data/
-
+output/
 # Ignore the .src_omdena_legal directory or file
 .src_omdena_legal
 

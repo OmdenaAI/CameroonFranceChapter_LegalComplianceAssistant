@@ -1,7 +1,7 @@
 # Path constants
 INPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/data/pdfs/Detailed_Divorce_Agreement_5.pdf"
-OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/Redacted_pdf.pdf"
-IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/images"
+OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
+IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
 
 # Gliner constansts
 LABELS = ["Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
@@ -14,3 +14,5 @@ FONT_NAME = "Helvetica"
 PYTHON_EXEC = "D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/.src_omdena_legal/Scripts/python.exe"
 YOLO_DETECT_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/yolov5/detect.py"
 YOLO_WEIGHTS = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/src/yolov5/runs/train/exp/weights/best.pt"
+YOLO_OUTPUT_FOLDER = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
+YOLO_SUBFOLDER = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/exp"
