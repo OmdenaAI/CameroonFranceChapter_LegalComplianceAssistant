@@ -16,6 +16,7 @@ if __name__ == "__main__":
     # Save the modified PDF
     save_pdf(doc, settings.OUTPUT_PDF_PATH)
     print(f"Modified PDF saved as {settings.OUTPUT_PDF_PATH}")
+    # For YOLO
     convert_pdf_to_images()
     image_inference_yolo()
     create_black_bounding_box()

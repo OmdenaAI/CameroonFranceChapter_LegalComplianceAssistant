@@ -4,6 +4,8 @@ from utils.gliner_utils import resolve_overlaps_and_errors
 from utils.gliner_utils import find_text_block
 import settings
 
+
+
 def replace_text_with_labels(model, input_path):
     doc = fitz.open(input_path)
     fontname = settings.FONT_NAME
@@ -20,16 +22,18 @@ def replace_text_with_labels(model, input_path):
 
         # Sort entities by position (reverse order to avoid coordinate shifts)
         entities.sort(key=lambda x: x["start"], reverse=True)
-
+        print(entities)
         # differentiate values
         for ent in entities:
             if ent['text'] not in new_entities.values():
-                new_entities[f"{ent['label']}__0"] = ent['text']
-            else:
+                # Find all existing keys with the same label prefix
                 match_keys = [int(k.split("__")[1]) for k in new_entities.keys() if k.split("__")[0] == ent['label']]
-                sorted(match_keys,reverse=True)
-                new_label = match_keys[0] + 1
-                new_entities[f"{ent['label']}__{new_label}"] = ent['text']
+                
+                # Determine the next suffix (increment the largest suffix by 1, or start from 0 if no matches)
+                new_suffix = max(match_keys, default=-1) + 1
+                
+                # Add the new entity with the updated suffix
+                new_entities[f"{ent['label']}__{new_suffix}"] = ent['text']
         # Replace entities in the PDF
         for entity in entities:
             original_text = entity["text"]
