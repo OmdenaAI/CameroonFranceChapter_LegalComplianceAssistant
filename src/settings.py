@@ -1,10 +1,10 @@
 # Path constants
-INPUT_PDF_PATH = r"data/SEC/Amazon.pdf"
+INPUT_PDF_PATH = r"data/Financial_bills/document_7.pdf"
 OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
 IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
 
 # Gliner constansts
-LABELS = ["Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
+LABELS = ["Company Name", "Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
 PRIORITY_LABELS = ["Street_Address", "State", "City", "Country"]
 GLINER_MODEL = "urchade/gliner_multi_pii-v1"
 THRESHOLD = 0.5
