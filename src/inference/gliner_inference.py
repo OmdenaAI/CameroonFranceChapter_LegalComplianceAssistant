@@ -22,7 +22,6 @@ def replace_text_with_labels(model, input_path):
 
         # Sort entities by position (reverse order to avoid coordinate shifts)
         entities.sort(key=lambda x: x["start"], reverse=True)
-        print(entities)
         # differentiate values
         for ent in entities:
             if ent['text'] not in new_entities.values():

@@ -1,5 +1,5 @@
 # Path constants
-INPUT_PDF_PATH = r"data/Financial_bills/document_7.pdf"
+INPUT_PDF_PATH = r"data/divorce/divorce_main/pdfs/Detailed_Divorce_Agreement_5.pdf"
 OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
 IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
 
