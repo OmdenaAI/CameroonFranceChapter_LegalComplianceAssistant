@@ -8,13 +8,16 @@ import string
 import consts
 import argparse
 import tempfile
-from PIL import Image
 from pathlib import Path
+from PIL import Image, ImageDraw
+from metrics_utils import get_iou
 from fontTools.ttLib import TTFont
 from spacy.util import filter_spans
 from spacy.language import Language
+from multiprocessing import Pool, Queue
 from spacy.pipeline import EntityRuler, Sentencizer
 from sentence_transformers import SentenceTransformer
+from analyze_images import analyze_print, analyze_handwritting
 
 fitz.TOOLS.set_small_glyph_heights(True)
 
@@ -371,19 +374,6 @@ def load_font(font_name):
     return None
 
 
-def get_iou(bbox1, bbox2):
-    x0, y0, x1, y1 = bbox1
-    xx0, yy0, xx1, yy1 = bbox2
-    max_x0 = max(x0, xx0)
-    max_y0 = max(y0, yy0)
-    min_x1 = min(x1, xx1)
-    min_y1 = min(y1, yy1)
-    intersection_area = max((min_x1 - max_x0) * (min_y1 - max_y0), 0)
-    union_area = (x1 - x0) * (y1 - y0) + (xx1 - xx0) * (yy1 - yy0) - intersection_area
-    
-    return intersection_area / union_area
-
-
 def is_span_a_link(line_subs, links, iou_thres=0.5):
     overlapping_links = []
     for line_sub in line_subs:
@@ -597,7 +587,6 @@ def substitute_page_entities(pdf, lines_subs, min_distance=3):
         if replacements:
             annots = add_redact_annots(page, replacements)
             if annots:
-                page.apply_redactions()
                 for (draw_redact_rect, _) in annots:
                     page.draw_rect(draw_redact_rect, color=(0, 0, 0), fill=(0, 0, 0))
                 all_replacements.extend(annots)
@@ -605,22 +594,31 @@ def substitute_page_entities(pdf, lines_subs, min_distance=3):
     return all_replacements
 
 
-def run_nlp(paragraphs):
-    nlp = spacy.load("en_core_web_trf")
-    nlp_acronyms = spacy.load(consts.ACRONYMS_MODEL_DIR)
-    encoder_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  
-
+def load_nlp_model(model_name="en_core_web_trf"):
+    nlp = spacy.load(model_name)
     components = ["ipv4", "ipv6", "phone", "email", "ssn", "medicare", "vin", "url"]
-
     ruler = nlp.add_pipe("entity_ruler", before="ner")
     patterns = [{"label": "DATE", "pattern": [{"TEXT": {"REGEX": r"\d{1,2}/\d{1,2}/\d{4}"}}]}]
     ruler.add_patterns(patterns)
-
     #nlp.add_pipe("custom_sentencizer", before="parser")
     nlp.add_pipe('sentencizer')
-    nlp_acronyms.add_pipe('sentencizer')
     for c in components:
         nlp.add_pipe(c, last=True)
+
+    return nlp
+
+
+def load_nlp_acronyms_model():
+    nlp_acronyms = spacy.load(consts.ACRONYMS_MODEL_DIR)
+    nlp_acronyms.add_pipe('sentencizer')
+
+    return nlp_acronyms
+
+
+def run_nlp(paragraphs):
+    nlp = load_nlp_model()
+    nlp_acronyms = load_nlp_acronyms_model()
+    encoder_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  
 
     subs = {} 
     for idx, paragraph in enumerate(paragraphs):
@@ -778,7 +776,6 @@ def extract_pdf_text(pdf, line_gap_threshold=5):
             char_offset = 0
             paragraph_line_index = 0
 
-
         temp_line = line.copy()
         temp_line["spans_bbox"] = (x0, y0, x1, y1)
         temp_line["start_char"] = char_offset
@@ -832,28 +829,136 @@ def map_subs_to_lines(subs, paragraphs):
     return lines_subs
 
 
-def extract_pdf_page_images(page):
+def extract_pdf_images(pdf):
     images = []
 
-    for img_index, img in enumerate(page.get_images(full=True)):
-        xref = img[0]
-        base_image = page.parent.extract_image(xref)
-        image_bytes = base_image["image"]
-        images.append({
-            "ext": base_image["ext"], 
-            "data": Image.open(io.BytesIO(image_bytes))
-        })
+    for page in pdf:
+        for img_index, img in enumerate(page.get_images(full=True)):
+            xref = img[0]
+            base_image = page.parent.extract_image(xref)
+            image_bytes = base_image["image"]
+            images.append({
+                "xref": xref,
+                "page_num": page.number,
+                "ext": base_image["ext"], 
+                "data": Image.open(io.BytesIO(image_bytes))
+            })
 
     return images
 
 
-def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf")):
+def extract_pdf_drawings(pdf):
+    drawings = {}
+
+    for page in pdf:
+        drawings[page.number] = page.get_drawings()
+
+    return drawings
+
+
+def save_images(images, dest_dir=tempfile.gettempdir()):
+    for img in images:
+        img_name = f"{img['page_num']}_{img['xref']}.{img['ext']}"
+        img_path = os.path.join(dest_dir, img_name)
+        img["data"].save(img_path)
+        yield img_path
+    
+
+def save_drawings(drawings, page_width, page_height, dest_dir=tempfile.gettempdir()):
+    for idx, (page_num, page_drawings) in enumerate(drawings.items()):
+        image = Image.new("RGB", (page_width, page_height), "white")
+        draw = ImageDraw.Draw(image)
+    
+        for drawing in page_drawings:
+            min_x = float("inf")
+            max_x = 0
+            min_y = float("inf")
+            max_y = 0
+
+            for path in drawing["items"]:
+                if path[0] == "l":  # Line segment
+                    (x0, y0), (x1, y1) = path[1:]
+                    draw.line((x0, y0, x1, y1), fill="black", width=2)
+                    min_x = min(min_x, x0, x1)
+                    max_x = max(max_x, x0, x1)
+                    min_y = min(min_y, y0, y1)
+                    max_y = max(max_y, y0, y1)
+                elif path[0] == "re":  # Rectangle
+                    x0, y0, x1, y1 = path[1]
+                    draw.rectangle((x0, y0, x1, y1), outline="black")
+                    min_x = min(min_x, x0, x1)
+                    max_x = max(max_x, x0, x1)
+                    min_y = min(min_y, y0, y1)
+                    max_y = max(max_y, y0, y1)
+                elif path[0] == "c":  # Curve (quadratic Bezier)
+                    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = path[1:]
+                    min_x = min(min_x, x0)
+                    max_x = max(max_x, x2, x3)
+                    min_y = min(min_y, y0, y1, y2, y3)
+                    max_y = max(max_y, y0, y1, y2, y3)
+                    draw.line((x0, y0, x1, y1, x2, y2, x3, y3), fill="black", width=2)
+        crop_bbox = (min_x, min_y, max_x, max_y)
+        cropped_image = image.crop(crop_bbox)
+        if (cropped_image.size[0] != 0) and (cropped_image.size[1] != 0):
+            img_name = f"{page_num}_{idx}.jpeg"
+            img_path = os.path.join(dest_dir, img_name)
+            cropped_image.save(img_path)
+            yield img_path, crop_bbox
+
+
+def add_images_redaction(pdf, images_text):
+    nlp = load_nlp_model()
+
+    for img_path, img_info in images_text.items():
+        page_num, img_xref = (int(i) for i in Path(img_path).stem.split("_"))
+        img_rect = pdf[page_num].get_image_rects(img_xref)[0]
+
+        for line in img_info["text_lines"]:
+            doc = nlp(line["text"])
+
+            if doc.ents:
+                width_scale = img_rect.width / img_info["image_size"][0]
+                height_scale = img_rect.height / img_info["image_size"][1]
+                text_rect = [ 
+                    img_rect[0] + line["bbox"][0] * width_scale,
+                    img_rect[1] + line["bbox"][1] * height_scale,
+                    img_rect[0] + line["bbox"][2] * width_scale,
+                    img_rect[1] + line["bbox"][3] * height_scale
+                ]
+                pdf[page_num].add_redact_annot(text_rect, fill=(0, 0, 0))
+
+
+def add_drawings_redaction(pdf, analysis_result, drawings_images_info):
+    for img_path, is_handwritten_signature in analysis_result:
+        if is_handwritten_signature:
+            page_num = int(Path(img_path).name.split("_")[0])
+            drawing_bbox = [d for d in drawings_images_info if d[0] == img_path][0][1]
+            pdf[page_num].add_redact_annot(drawing_bbox, fill=(0, 0, 0))
+
+
+def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf"), reconstruct=True):
     input_file_path = Path(input_file)
     pdf = fitz.open(input_file_path.absolute().as_posix())
+    #with Pool(processes=4) as pool:
+    #    results = pool.starmap(analyze_print, (img_paths))
+    #    for (generated_text, scores) in results:
+    #        print(f"generated text: {generated_text}")
     paragraphs = extract_pdf_text(pdf)
     lines_subs = run_nlp(paragraphs)
     replacements = substitute_page_entities(pdf, lines_subs)
-    reconstruct_deleted_text(pdf, replacements, paragraphs)            
+    if reconstruct:
+        reconstruct_deleted_text(pdf, replacements, paragraphs)
+    images = extract_pdf_images(pdf)
+    img_paths = list(save_images(images))
+    images_text = analyze_print(img_paths)
+    add_images_redaction(pdf, images_text)
+    drawings = extract_pdf_drawings(pdf)
+    drawings_images_info = list(save_drawings(drawings, int(pdf[0].rect.width), int(pdf[0].rect.height)))
+    drawing_images_paths = [d[0] for d in drawings_images_info]
+    results = analyze_handwritting(drawing_images_paths)
+    add_drawings_redaction(pdf, results, drawings_images_info)
+    for page in pdf:
+        page.apply_redactions()
     pdf.subset_fonts()
     output_file_path = Path(output_file)
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -864,7 +969,8 @@ def main(input_file, output_file=os.path.join(tempfile.gettempdir(), "test.pdf")
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input", type=str, required=True)
-    parser.add_argument("-o", "--output", type=str)
+    parser.add_argument("-o", "--output", type=str),
+    parser.add_argument("-r", "--reconstruct", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
     
-    main(args.input, args.output)
+    main(args.input, args.output, args.reconstruct)
