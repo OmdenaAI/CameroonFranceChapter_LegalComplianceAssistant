@@ -1,12 +1,13 @@
 # Path constants
-INPUT_PDF_PATH = r"data/divorce/divorce_main/pdfs/Detailed_Divorce_Agreement_5.pdf"
+INPUT_PDF_PATH = r"data/SEC/Amazon.pdf"
 OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
 IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
 
 # Gliner constansts
 LABELS = ["Company Name", "Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
 PRIORITY_LABELS = ["Street_Address", "State", "City", "Country"]
-GLINER_MODEL = "urchade/gliner_multi_pii-v1"
+#GLINER_MODEL = "urchade/gliner_multi_pii-v1"
+GLINER_MODEL = "gliner-community/gliner_large-v2.5"
 THRESHOLD = 0.5
 FONT_NAME = "Helvetica"
 

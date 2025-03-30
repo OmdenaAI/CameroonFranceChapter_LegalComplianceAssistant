@@ -59,7 +59,7 @@ def replace_text_with_labels(model, input_path):
                     text=f"[{label}]",
                     fontsize=block["size"],
                     fontname=fontname,
-                    text_color=block["color"],
+                    #text_color=block["color"],
                     fill=(1, 1, 1)
                 )
 
