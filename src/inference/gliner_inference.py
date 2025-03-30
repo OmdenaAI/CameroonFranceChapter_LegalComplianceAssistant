@@ -7,6 +7,7 @@ import settings
 
 
 def replace_text_with_labels(model, input_path):
+    print(input_path)
     doc = fitz.open(input_path)
     fontname = settings.FONT_NAME
     new_entities = {}

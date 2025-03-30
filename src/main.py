@@ -8,7 +8,7 @@ from utils.helper import convert_pdf_to_images
 from utils.yolo_utils import create_black_bounding_box
 from utils.helper import convert_img_to_pdf
 
-if __name__ == "__main__":
+def run():
     # # --- Initialize GLiNER ---
     model = gliner.GLiNER.from_pretrained(settings.GLINER_MODEL)
     # Replace text with labels in the input PDF
@@ -21,6 +21,7 @@ if __name__ == "__main__":
     image_inference_yolo()
     create_black_bounding_box()
     convert_img_to_pdf()
+    # scanned PDF - to work on (CV -> Mistral OCR)
 
 
 

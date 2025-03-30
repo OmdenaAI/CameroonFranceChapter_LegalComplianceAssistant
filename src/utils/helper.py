@@ -13,6 +13,7 @@ def save_pdf(doc, output_path):
 
 
 def convert_pdf_to_images():
+    os.makedirs(settings.IMAGE_PATH)
     pdf_list = [settings.OUTPUT_PDF_PATH+"/Redacted_pdf.pdf"]
     for pdfs in pdf_list:
         file_name_image = pdfs.split(r"/")[-1].split(".")[0]
@@ -35,4 +36,5 @@ def convert_img_to_pdf():
     first_image.convert("RGB").save(output_pdf_path, save_all=True, append_images=other_images)
     shutil.rmtree(f"{settings.YOLO_OUTPUT_FOLDER}/masked", ignore_errors=True)
     shutil.rmtree(f"{settings.YOLO_SUBFOLDER}", ignore_errors=True)
+    shutil.rmtree(settings.IMAGE_PATH, ignore_errors=True)
     print(f"Combined PDF saved at: {output_pdf_path}")
