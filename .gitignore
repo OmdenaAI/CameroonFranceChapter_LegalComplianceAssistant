@@ -1,6 +1,7 @@
 # Ignore the data directory
 data/
 output/
+src/gliner_inference_model
 # Ignore the .src_omdena_legal directory or file
 .src_omdena_legal
 

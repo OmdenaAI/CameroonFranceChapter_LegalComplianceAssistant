@@ -36,5 +36,5 @@ def convert_img_to_pdf():
     first_image.convert("RGB").save(output_pdf_path, save_all=True, append_images=other_images)
     shutil.rmtree(f"{settings.YOLO_OUTPUT_FOLDER}/masked", ignore_errors=True)
     shutil.rmtree(f"{settings.YOLO_SUBFOLDER}", ignore_errors=True)
-    shutil.rmtree(settings.IMAGE_PATH, ignore_errors=True)
+    shutil.rmtree(settings.IMAGE_PATH)
     print(f"Combined PDF saved at: {output_pdf_path}")

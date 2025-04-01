@@ -4,11 +4,14 @@ OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianc
 IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
 
 # Gliner constansts
-LABELS = ["Company Name", "Person", "Money", "Date", "Tenure", "Country", "Street_Address", "State", "City"]
-PRIORITY_LABELS = ["Street_Address", "State", "City", "Country"]
+LABELS = ["Company Name", "Person", "Money", "Date", "Tenure", 
+          "Country", "Street Address", "STREET ADDRESS", "State", "City",
+          "Medicine Name","ID","Phone"]
+PRIORITY_LABELS = ["Street Address", "STREET ADDRESS", "State", "City", "Country"]
 #GLINER_MODEL = "urchade/gliner_multi_pii-v1"
-GLINER_MODEL = "gliner-community/gliner_large-v2.5"
-THRESHOLD = 0.5
+#GLINER_MODEL = "gliner-community/gliner_large-v2.5"
+GLINER_MODEL = "src/gliner_inference_model" # self finetuned model
+THRESHOLD = 0.75
 FONT_NAME = "Helvetica"
 
 # YOLO Path
