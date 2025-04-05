@@ -21,7 +21,7 @@ def run():
     image_inference_yolo()
     create_black_bounding_box()
     convert_img_to_pdf()
-    # scanned PDF - to work on (CV -> Mistral OCR)
+    
 
 
 

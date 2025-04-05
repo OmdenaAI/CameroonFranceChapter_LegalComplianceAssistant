@@ -2,6 +2,7 @@
 INPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/input.pdf"
 OUTPUT_PDF_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output"
 IMAGE_PATH = r"D:/Raghu Studies/omdena/CameroonFranceChapter_LegalComplianceAssistant/output/images"
+PYTESSERACT_PATH = r'D:\tesseract\tesseract.exe'
 
 # Gliner constansts
 LABELS = ["Company Name", "Person", "Money", "Date", "Tenure", 
