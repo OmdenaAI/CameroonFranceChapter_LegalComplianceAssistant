@@ -4,7 +4,7 @@ output/
 src/gliner_inference_model
 # Ignore the .src_omdena_legal directory or file
 .src_omdena_legal
-
+src/model_inferencing/gliner_inference_model
 # Ignore compiled Python files
 __pycache__/
 *.pyc
