@@ -13,7 +13,7 @@ def save_pdf(doc, output_path):
 
 
 def convert_pdf_to_images():
-    os.makedirs(settings.IMAGE_PATH)
+    os.makedirs(settings.IMAGE_PATH, exist_ok=True)
     pdf_list = [settings.OUTPUT_PDF_PATH+"/Redacted_pdf.pdf"]
     for pdfs in pdf_list:
         file_name_image = pdfs.split(r"/")[-1].split(".")[0]
