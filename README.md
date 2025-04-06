@@ -13,10 +13,10 @@ YOLO model is used for object detection on Signature and Logo
 
 2) Create a new folder inside src/model_inferencing directory called gliner_inference_model and paste the contents from drive link into this directory
     Drive link: https://drive.google.com/file/d/1e2sKYOgQS3a1LM-xuT0JL2EzQJfGDv7K/view?usp=drive_link
-
-3) Install Docker desktop in your machine 
-4) Finally in the root folder, run the following command 
+3) Create a new output folder in root directory
+4) Install Docker desktop in your machine 
+5) Finally in the root folder, run the following command 
     docker-compose up --build
-5) The streamlit app runs in localhost:8501 and the user can upload the file
-6) The backend api runs which does model inferencing runs in localhost:8000 port
-7) To shutdown the , docker-compose down
+6) The streamlit app runs in localhost:8501 and the user can upload the file
+7) The backend api runs which does model inferencing runs in localhost:8000 port
+8) To shutdown the , docker-compose down
