@@ -27,7 +27,7 @@ def convert_img_to_pdf():
     image_files = os.listdir(f"{settings.YOLO_OUTPUT_FOLDER}/masked")
     image_paths = [f"{settings.YOLO_OUTPUT_FOLDER}/masked/{image_file}" for image_file in image_files]  # Adjust the range based on the number of images
 
-
+    print(image_paths)
     first_image = Image.open(image_paths[0])
 
     other_images = [Image.open(img_path).convert("RGB") for img_path in image_paths[1:]]
