@@ -69,9 +69,6 @@ if uploaded_file is not None:
                 mime="application/pdf"
             )
 
-        # Optionally display the extracted text
-        st.subheader("Extracted Text")
-        st.text_area("Text Preview", value=st.session_state.result.get("extracted_text", ""), height=300)
 
 # Add legend section
 with st.expander("Legend for Redaction Labels"):
