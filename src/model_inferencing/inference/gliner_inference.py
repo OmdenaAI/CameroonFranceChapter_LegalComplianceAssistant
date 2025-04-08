@@ -5,7 +5,9 @@ from utils.gliner_utils import find_text_block
 import settings
 
 def split_text_into_chunks(text, max_tokens=296):
-    
+    """
+    Splits text into chunks of maximum token length.
+    """
     words = text.split()  # Split text into words
     chunks = []
     current_chunk = []
@@ -55,27 +57,38 @@ def replace_text_with_labels(model, input_path):
         # Sort entities by position (reverse order to avoid coordinate shifts)
         all_entities.sort(key=lambda x: x["start"], reverse=True)
 
-        # Differentiate values
+        # Differentiate values and map labels
         for ent in all_entities:
             if ent['text'] not in new_entities.values():
-                # Find all existing keys with the same label prefix
+                # Map the label using LABELS_MAPPING
+                mapped_label = settings.LABELS_MAPPING.get(ent['label'], ent['label'])
+
+                # Find all existing keys with the same label prefix (use mapped_label here)
                 match_keys = [
                     int(k.split("__")[1]) for k in new_entities.keys()
-                    if k.split("__")[0] == ent['label']
+                    if k.split("__")[0] == mapped_label
                 ]
                 
                 # Determine the next suffix (increment the largest suffix by 1, or start from 0 if no matches)
                 new_suffix = max(match_keys, default=-1) + 1
                 
                 # Add the new entity with the updated suffix
-                new_entities[f"{ent['label']}__{new_suffix}"] = ent['text']
+                new_entities[f"{mapped_label}__{new_suffix}"] = ent['text']
 
         # Replace entities in the PDF
         for entity in all_entities:
             original_text = entity["text"]
+            label = None  # Initialize label to avoid UnboundLocalError
+
+            # Find the corresponding label in new_entities
             for key, value in new_entities.items():
                 if value == original_text:
                     label = key  # Update the label
+                    break  # Exit the loop once a match is found
+
+            if label is None:
+                print(f"Warning: No label found for text '{original_text}'. Skipping replacement.")
+                continue  # Skip this entity if no label is found
 
             # Find all occurrences of the entity on the page
             text_instances = page.search_for(original_text)
@@ -92,7 +105,8 @@ def replace_text_with_labels(model, input_path):
                     text=f"[{label}]",
                     fontsize=block["size"],
                     fontname=fontname,
-                    fill=(1, 1, 1)
+                    fill=False
+                    #fill=(1, 1, 1)
                 )
 
         # Apply all redactions on the page

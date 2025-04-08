@@ -3,6 +3,21 @@ import os
 import requests
 
 BACKEND_URL = "http://inference:8000/process"
+LABELS_MAPPING = {
+    "Company Name": "Com",
+    "Person": "P",
+    "Money": "$",
+    "Date": "Date",
+    "Tenure": "Ten",
+    "Country": "Co",
+    "Street Address": "Addr",
+    "STREET ADDRESS": "Addr",
+    "State": "St",
+    "City": "Ct",
+    "Medicine Name": "Med",
+    "ID": "ID",
+    "Phone": "Ph"
+}
 
 def save_uploaded_file(uploaded_file, save_path):
     with open(save_path, "wb") as f:
@@ -57,3 +72,8 @@ if uploaded_file is not None:
         # Optionally display the extracted text
         st.subheader("Extracted Text")
         st.text_area("Text Preview", value=st.session_state.result.get("extracted_text", ""), height=300)
+
+# Add legend section
+with st.expander("Legend for Redaction Labels"):
+    for label, abbreviation in LABELS_MAPPING.items():
+        st.markdown(f"- **{label}**: `{abbreviation}`")
