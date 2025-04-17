@@ -1,0 +1,46 @@
+# Ignore the data directory
+data/
+output/
+src/gliner_inference_model
+# Ignore the .src_omdena_legal directory or file
+.src_omdena_legal
+src/model_inferencing/gliner_inference_model
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore log files and databases
+*.log
+*.sqlite3
+*.db
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore distribution and build files
+dist/
+build/
+*.egg-info/
+*.whl
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore generated Word documents
+*.docx

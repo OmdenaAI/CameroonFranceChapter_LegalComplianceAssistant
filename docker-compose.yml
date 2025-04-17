@@ -1,0 +1,26 @@
+services:
+  inference:
+    build: ./src/model_inferencing
+    container_name: inference_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./output:/app/output
+    networks:
+      - redaction-net
+
+  streamlit:
+    build: ./src/streamlit_web_app
+    container_name: streamlit_app
+    ports:
+      - "8501:8501"
+    depends_on:
+      - inference
+    volumes:
+      - ./output:/app/output
+    networks:
+      - redaction-net
+
+networks:
+  redaction-net:
+    driver: bridge
