@@ -4,6 +4,11 @@ import settings
 from PIL import Image
 import os
 import shutil
+import re
+
+def extract_pg_num(filename):
+    match = re.search(r'pg(\d+)', filename)
+    return int(match.group(1)) if match else float('inf')
 
 def save_pdf(doc, output_path):
     output_path = output_path + "/Redacted_pdf.pdf"
@@ -24,7 +29,7 @@ def convert_pdf_to_images():
             page.save(rf'{settings.IMAGE_PATH}/{file_name_image}_pg{count}.jpg', 'JPEG')
 
 def convert_img_to_pdf():
-    image_files = os.listdir(f"{settings.YOLO_OUTPUT_FOLDER}/masked")
+    image_files = sorted(os.listdir(f"{settings.YOLO_OUTPUT_FOLDER}/masked"), key=extract_pg_num)
     image_paths = [f"{settings.YOLO_OUTPUT_FOLDER}/masked/{image_file}" for image_file in image_files]  # Adjust the range based on the number of images
 
     print(image_paths)
