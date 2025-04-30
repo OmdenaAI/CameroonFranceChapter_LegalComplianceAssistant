@@ -1,0 +1,6 @@
+streamlit==1.18.0
+pillow==9.2.0
+pandas==1.5.3
+python-pptx==0.6.21
+python-docx==0.8.11
+PyPDF2==2.10.0
